@@ -1,0 +1,14 @@
+{
+  "name": "cf-email-consumer",
+  "type": "module",
+  "version": "0.0.1",
+  "dependencies": {
+    "cloudflare": "^5.2.0",
+    "mimetext": "^3.0.28"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260210.0",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.64.0"
+  }
+}

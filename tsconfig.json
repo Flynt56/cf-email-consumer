@@ -1,0 +1,14 @@
+{
+  "include": [
+    "**/*"
+  ],
+  "exclude": [
+    "dist"
+  ],
+  "compilerOptions": {
+    "baseUrl": ".",
+    "types": [
+      "@cloudflare/workers-types"
+    ]
+  }
+}
