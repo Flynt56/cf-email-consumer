@@ -10,3 +10,4 @@ node_modules/
 
 # jetbrains setting folder
 .idea/
+.ai/

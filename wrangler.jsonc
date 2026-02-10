@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "vo-web",
+  "name": "cf-email-consumer",
   "main": "./src/index.ts",
   "compatibility_date": "2025-09-02",
   "compatibility_flags": [
@@ -8,11 +8,16 @@
   ],
   "send_email": [
     {
-      "name": "SEB",
-      "destination_address": "info@flyntech.hr"
+      "name": "SEB"
     }
   ],
   "queues": {
+    "producers": [
+      {
+        "binding": "EMAIL_QUEUE",
+        "queue": "contact-email-queue"
+      }
+    ],
     "consumers": [
       {
         "queue": "contact-email-queue",
@@ -25,7 +30,8 @@
     ]
   },
   "vars": {
-    "BASE_DELAY_SECONDS": 30
+    "BASE_DELAY_SECONDS": 30,
+    "CONTACT_PATH": "/api/contact"
   },
   "observability": {
     "enabled": true,
