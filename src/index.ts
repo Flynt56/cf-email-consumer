@@ -1,11 +1,38 @@
-import {EmailMessage} from "cloudflare:email";
-import {createMimeMessage, Mailbox} from "mimetext";
+import {EmailMessage} from 'cloudflare:email';
+import {createMimeMessage, Mailbox} from 'mimetext';
+
+/*
+ * The contact-form mailer: sites post a submission here, it goes on a queue, and the queue handler sends it as an email
+ * to the site's own address, with the visitor as Reply-To.
+ *
+ * Data protection (GDPR):
+ * - Logs never carry the visitor's name, email address or message, only the site, the step, and status codes. Error
+ *   texts are logged with any email address in them replaced by [address].
+ * - The queue holds each submission until it's sent, and the dead-letter queue keeps the ones that failed. Both are
+ *   personal data: keep their message retention short (the queue's settings in Cloudflare) and empty the dead-letter
+ *   queue once failures are looked at.
+ * - Callers get a generic error, so nothing about the visitor or the setup is echoed back.
+ *
+ * Security: the sender and recipient come from SITES, configured per site on the server, never from the request, so
+ * the worker can't be used to mail anyone else (an open relay). Sender and recipient fields in a request are ignored.
+ * Also: pin allowed_destination_addresses on the send_email binding, and set workers_dev: false with no route, since
+ * sites reach it through a service binding only.
+ */
 
 interface Env {
     SEB: SendEmailClient;
     EMAIL_QUEUE: Queue<EmailQueueMessage>;
-    BASE_DELAY_SECONDS: number;
+    BASE_DELAY_SECONDS?: number | string;
     CONTACT_PATH: string;
+    /** Per site_id, an object var in wrangler.jsonc, e.g.
+     *  "SITES": {"vo": {"sender": {"address": "contact@mail.ib.actor", "name": "Contact Form"},
+     *                     "recipient": {"address": "hey@ib.actor"}}} */
+    SITES: Record<string, SiteConfig>;
+}
+
+interface SiteConfig {
+    sender: MailboxAddress;
+    recipient: MailboxAddress;
 }
 
 interface SendEmailClient {
@@ -14,10 +41,11 @@ interface SendEmailClient {
 
 interface MailboxAddress {
     address: string;
-    name?: string;
+    name?: string | undefined;
 }
 
 interface EmailEnvelope {
+    site: string;
     user: MailboxAddress;
     sender: MailboxAddress;
     recipient: MailboxAddress;
@@ -30,110 +58,106 @@ interface EmailQueueMessage {
     timestamp: number;
 }
 
+const log = (event: string) => {
+    console.log(`Contact mailer: ${event}`);
+};
+
+/** Error text with email addresses taken out, since a mail error can quote them. */
+const redact = (text: string) => text.replace(/[^\s<>@"]+@[^\s<>@"]+/g, '[address]');
+
+/** A line break in a name could add headers to the email, so such submissions are refused. */
+const hasLineBreak = (text: string) => /[\r\n]/.test(text);
+
 export default {
     async fetch(request: Request, env: Env) {
-        if (request.method == "POST" && request.url.endsWith(env.CONTACT_PATH)) {
+        if (request.method === 'POST' && request.url.endsWith(env.CONTACT_PATH)) {
             const formData = await request.formData();
-
-            const siteId = formData.get("site_id") as string;
-            const message = formData.get("message") as string;
-
-            const userMailbox = {
-                name: formData.get('user_name'),
-                address: formData.get('user_address')
-            } as MailboxAddress;
-
-            const senderMailbox = {
-                name: formData.get('sender_name'),
-                address: formData.get('sender_address')
-            } as MailboxAddress;
-
-            const recipientMailbox = {
-                name: formData.get('recipient_name'),
-                address: formData.get('recipient_address')
-            } as MailboxAddress;
-
-            if (!userMailbox.name || !userMailbox.address || !message) {
-                return new Response("Missing required fields", {status: 400});
-            }
-
-            if (userMailbox.name.length > 255) {
-                return new Response("Validation error", {status: 400});
-            }
-
-            if (userMailbox.address.length > 254) {
-                return new Response("Validation error", {status: 400});
-            }
-
-            if (message.length > 1000) {
-                return new Response("Validation error", {status: 400});
-            }
-
-            const emailEnvelope: EmailEnvelope = {
-                user: userMailbox,
-                sender: senderMailbox,
-                recipient: recipientMailbox,
-                message: message
+            const field = (name: string) => {
+                const value = formData.get(name);
+                return typeof value === 'string' ? value : '';
             };
+
+            // Only a configured site_id is accepted; an unknown one isn't echoed into the logs.
+            const site = field('site_id');
+            const config = Object.hasOwn(env.SITES, site) ? env.SITES[site] : undefined;
+            if (!config) {
+                log('rejected, unknown site');
+                return new Response('Validation error', {status: 400});
+            }
+            const {sender, recipient} = config;
+            const message = field('message');
+            const user: MailboxAddress = {name: field('user_name'), address: field('user_address')};
+
+            const invalid =
+                !user.name || !user.address || !message
+                    ? 'a field is empty'
+                    : user.name.length > 255
+                      ? 'name too long'
+                      : user.address.length > 254
+                        ? 'email address too long'
+                        : message.length > 1000
+                          ? 'message too long'
+                          : hasLineBreak(user.name) || hasLineBreak(user.address)
+                            ? 'line break in name or address'
+                            : '';
+            if (invalid) {
+                log(`${site}: rejected, ${invalid}`);
+                return new Response('Validation error', {status: 400});
+            }
 
             try {
                 await env.EMAIL_QUEUE.send({
                     $type: 'SendContactEmail',
-                    data: emailEnvelope,
-                    timestamp: Date.now()
-                } as EmailQueueMessage);
+                    data: {site, user, sender, recipient, message},
+                    timestamp: Date.now(),
+                });
 
-                console.log(`Email queued.\nFor: ${userMailbox.address}\nFrom: ${userMailbox.name}`);
-                return new Response("Email sent successfully.", {status: 200});
+                log(`${site}: queued, message of ${message.length} characters`);
+                return new Response('Email queued.', {status: 200});
             } catch (e) {
-                console.error(`Error queuing email.\nError: ${e}`);
-                return new Response(`Error: ${(e as Error).message}`, {status: 500});
+                console.error(`Contact mailer: ${site}: queuing failed. ${redact(String(e))}`);
+                return new Response('Error queuing email.', {status: 500});
             }
         }
 
-        return new Response("Not Found", {status: 404});
+        return new Response('Not Found', {status: 404});
     },
+
     async queue(batch: MessageBatch<EmailQueueMessage>, env: Env) {
-        const baseDelaySeconds = env.BASE_DELAY_SECONDS || 30;
+        const baseDelaySeconds = Number(env.BASE_DELAY_SECONDS ?? 30);
 
         for (const it of batch.messages) {
-            const msg = it.body;
-            const envelope = msg.data;
-            const attemptNum = it.attempts;
+            const {data: envelope, $type} = it.body;
+            // Messages queued before the site was recorded have no site.
+            const site = envelope.site || 'unknown';
 
             const mimeMsg = createMimeMessage();
-            mimeMsg.setSender({addr: envelope.sender.address, name: envelope.sender.name || envelope.sender.address});
+            mimeMsg.setSender({addr: envelope.sender.address, name: envelope.sender.name ?? envelope.sender.address});
             mimeMsg.setRecipient({
                 addr: envelope.recipient.address,
-                name: envelope.recipient.name || envelope.recipient.address
+                name: envelope.recipient.name ?? envelope.recipient.address,
             });
-            mimeMsg.setHeader("Reply-To", new Mailbox({addr: envelope.user.address, name: envelope.user.name}));
-            mimeMsg.setSubject("New Contact Form Submission");
+            mimeMsg.setHeader('Reply-To', new Mailbox({addr: envelope.user.address, name: envelope.user.name ?? ''}));
+            mimeMsg.setSubject('New Contact Form Submission');
             mimeMsg.addMessage({
-                contentType: "text/plain",
-                data: `Name: ${envelope.user.name}\nEmail: ${envelope.user.address}\n\nMessage:\n${envelope.message}`
+                contentType: 'text/plain',
+                data: `Name: ${envelope.user.name ?? ''}\nEmail: ${envelope.user.address}\n\nMessage:\n${envelope.message}`,
             });
 
-            const emailMessage = new EmailMessage(
-                envelope.sender.address,
-                envelope.recipient.address,
-                mimeMsg.asRaw()
-            );
+            const emailMessage = new EmailMessage(envelope.sender.address, envelope.recipient.address, mimeMsg.asRaw());
 
-            console.log(`[Queue] Processing message. Type: ${msg.$type}, Attempt: ${attemptNum}`);
-            console.log(`[Queue] Sending email from ${envelope.sender.address} to ${envelope.recipient.address}`);
+            log(`${site}: sending ${$type}, attempt ${it.attempts}`);
 
             try {
                 await env.SEB.send(emailMessage);
-
-                console.log("[Queue] Email sent successfully.");
-
+                log(`${site}: sent`);
                 it.ack();
-            } catch (error: any) {
-                const errorMessage = (error as Error).message || String(error);
-                const status = error.status || error.code;
-
-                console.error(`[Queue] Error sending email: ${errorMessage} (Status/Code: ${status})`);
+            } catch (error) {
+                const {status, code, message} = error as {status?: number; code?: number; message?: string};
+                const statusCode = status ?? code;
+                console.error(
+                    `Contact mailer: ${site}: sending failed (status ${statusCode ?? 'none'}). ${redact(message ?? String(error))}`,
+                );
 
                 // SMTP transient error codes:
                 // 421: Service not available
@@ -143,17 +167,20 @@ export default {
                 // 503/504: Sometimes returned by Cloudflare for transient issues
                 const retryableStatuses = [421, 450, 451, 452, 503, 504];
 
-                if (retryableStatuses.includes(status)) {
-                    const totalDelaySeconds = Math.ceil(baseDelaySeconds * Math.pow(2, attemptNum - 1) + Math.random() * 5);
-
-                    console.warn(`[Queue] Transient error. Retrying in ${totalDelaySeconds}s...`);
-
-                    it.retry({delaySeconds: totalDelaySeconds});
+                if (statusCode !== undefined && retryableStatuses.includes(statusCode)) {
+                    const delaySeconds = Math.ceil(baseDelaySeconds * Math.pow(2, it.attempts - 1) + Math.random() * 5);
+                    console.warn(`Contact mailer: ${site}: transient error, retrying in ${delaySeconds}s.`);
+                    it.retry({delaySeconds});
                 } else {
-                    console.error("[Queue] Permanent failure. Message will be moved to DLQ if max retries reached.");
-                    throw error;
+                    // Retried as-is until the queue's max_retries, then moved to the dead-letter queue. Retrying this
+                    // message alone (instead of throwing) keeps the rest of the batch going and keeps the original
+                    // error, which may quote addresses, out of the runtime's logs.
+                    console.error(
+                        `Contact mailer: ${site}: permanent failure; goes to the dead-letter queue after the last retry.`,
+                    );
+                    it.retry();
                 }
             }
         }
-    }
-} as ExportedHandler<Env>;
+    },
+} as ExportedHandler<Env, EmailQueueMessage>;

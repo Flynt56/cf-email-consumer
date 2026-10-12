@@ -1,3 +1,24 @@
 packages:
   - ./*
 
+onlyBuiltDependencies:
+  - core-js-pure
+  - esbuild
+  - sharp
+  - workerd
+
+# Only install versions published at least 7 days ago (in minutes). Hijacked releases are usually caught and pulled
+# within hours to days. Exceptions are urgent fixes too new to qualify, named by exact version; drop each once it's
+# old enough. (Same policy as vo-web and flyntech-web.)
+minimumReleaseAge: 10080
+minimumReleaseAgeExclude: []
+
+# Refuse a version whose publish is less trusted than earlier ones (lost provenance or trusted publishing), the usual
+# sign of a stolen token.
+trustPolicy: no-downgrade
+trustPolicyExclude:
+  - chokidar@4.0.3 # Dec 2024 release by the usual maintainer, published without provenance; widely used
+
+# Security patches a dependency hasn't picked up yet. Drop each once the parent ships the fix.
+overrides:
+  miniflare>sharp: 0.35.5 # wrangler's local dev pins 0.35.4 (GHSA-wq5f-xc86-pv6w, librsvg)
