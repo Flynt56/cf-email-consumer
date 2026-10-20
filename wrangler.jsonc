@@ -1,75 +1,73 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "cf-email-consumer",
-  "main": "./src/index.ts",
-  "compatibility_date": "2025-09-02",
-  "compatibility_flags": [
-    "nodejs_compat"
-  ],
-  // Sites reach this worker only through their CONTACT_HANDLER service binding, so it has no public address.
-  "workers_dev": false,
-  "preview_urls": false,
-  // The binding can only send from these senders to these recipients, whatever the code does. Keep both lists in step
-  // with SITES below; recipients must be verified addresses in Email Routing.
-  "send_email": [
-    {
-      "name": "SEB",
-      "allowed_sender_addresses": [
-        "contact@mail.ib.actor",
-        "contact@mail.flyntech.hr"
-      ],
-      "allowed_destination_addresses": [
-        "hey@ib.actor",
-        "info@flyntech.hr"
-      ]
-    }
-  ],
-  "queues": {
-    "producers": [
-      {
-        "binding": "EMAIL_QUEUE",
-        "queue": "contact-email-queue"
-      }
+    "$schema": "node_modules/wrangler/config-schema.json",
+    "name": "cf-email-consumer",
+    "main": "./src/index.ts",
+    "compatibility_date": "2025-09-02",
+    "compatibility_flags": [
+        "nodejs_compat"
     ],
-    "consumers": [
-      {
-        "queue": "contact-email-queue",
-        "max_retries": 5,
-        "dead_letter_queue": "contact-email-dlq"
-      },
-      {
-        "queue": "contact-email-dlq"
-      }
-    ]
-  },
-  "vars": {
-    "BASE_DELAY_SECONDS": 30,
-    "CONTACT_PATH": "/api/contact",
-    // Each site's sender and recipient, chosen by the site_id the site sends. Addresses in a request are ignored, so
-    // the worker can't mail anyone else. Add a site here (and to send_email above) before its form goes live.
-    "SITES": {
-      "vo": {
-        "sender": {
-          "address": "contact@mail.ib.actor",
-          "name": "Contact Form"
-        },
-        "recipient": {
-          "address": "hey@ib.actor"
+    "workers_dev": false,
+    "preview_urls": false,
+    "send_email": [
+        {
+            "name": "SEB",
+            "allowed_sender_addresses": [
+                "contact@mail.ib.actor",
+                "contact@mail.flyntech.hr"
+            ],
+            "allowed_destination_addresses": [
+                "hey@ib.actor",
+                "info@flyntech.hr"
+            ]
         }
-      },
-      "flyntech": {
-        "sender": {
-          "address": "contact@mail.flyntech.hr",
-          "name": "Contact Form"
-        },
-        "recipient": {
-          "address": "info@flyntech.hr"
+    ],
+    "queues": {
+        "producers": [
+            {
+                "binding": "EMAIL_QUEUE",
+                "queue": "contact-email-queue"
+            }
+        ],
+        "consumers": [
+            {
+                "queue": "contact-email-queue",
+                "max_retries": 5,
+                "dead_letter_queue": "contact-email-dlq"
+            },
+            {
+                "queue": "contact-email-dlq"
+            }
+        ]
+    },
+    "vars": {
+        "BASE_DELAY_SECONDS": 30,
+        "CONTACT_PATH": "/api/contact",
+        "SITES": {
+            "vo": {
+                "sender": {
+                    "address": "contact@mail.ib.actor",
+                    "name": "Contact Form"
+                },
+                "recipient": {
+                    "address": "hey@ib.actor"
+                }
+            },
+            "flyntech": {
+                "sender": {
+                    "address": "contact@mail.flyntech.hr",
+                    "name": "Contact Form"
+                },
+                "recipient": {
+                    "address": "info@flyntech.hr"
+                }
+            }
         }
-      }
+    },
+    "observability": {
+        "enabled": true,
+        "head_sampling_rate": 1,
+        "logs": {
+            "invocation_logs": false
+        }
     }
-  },
-  "observability": {
-    "enabled": true,
-    "head_sampling_rate": 1
-  }
 }
