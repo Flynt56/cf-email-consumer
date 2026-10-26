@@ -70,7 +70,7 @@ const hasLineBreak = (text: string) => /[\r\n]/.test(text);
 
 export default {
     async fetch(request: Request, env: Env) {
-        if (request.method === 'POST' && request.url.endsWith(env.CONTACT_PATH)) {
+        if (request.method === 'POST' && new URL(request.url).pathname === env.CONTACT_PATH) {
             const formData = await request.formData();
             const field = (name: string) => {
                 const value = formData.get(name);
